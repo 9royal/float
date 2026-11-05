@@ -1,7 +1,7 @@
 import React, { useReducer, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import TankScene from './Scene.jsx';
-import { OBJECTS } from './physics.js';
+import { OBJECTS,canCompareVolumes } from './physics.js';
 import { createExperiment, experimentReducer } from './experiment.js';
 import './style.css';
 import roMark from '../ro-mark-white.svg?raw';
@@ -12,12 +12,12 @@ const fmt = (x, places=1) => new Intl.NumberFormat('zh-TW',{maximumFractionDigit
 
 function App(){
   const [experiment, dispatch] = useReducer(experimentReducer, undefined, createExperiment);
-  const {objectId,density,externalForce,loadG,started,manualBottomCm,collectedCm3,phase,animationReady,flowPulse,rotation,measured,water} = experiment;
+  const {objectId,density,externalForce,loadG,started,manualBottomCm,collectedCm3,phase,animationReady,flowPulse,rotation,measured,water,viewRevision} = experiment;
   const [mode, setMode] = useState('observe');
   const helpRef = useRef(null);
   const object = OBJECTS[objectId];
   const displacement = started ? measured.displacedCm3 : 0;
-  const compareValid = !measured.flooded&&displacement>0&&Math.abs(collectedCm3-displacement)<0.25;
+  const compareValid = canCompareVolumes(object,measured,collectedCm3,started);
   const modelBusy = phase>=2&&!animationReady;
   const nextLabel = !started ? '放入水中' : phase===0 ? '觀察收集量杯' : phase===1&&compareValid ? '變形' : phase===2 ? (modelBusy?'變形中…':'疊合') : phase===3&&modelBusy ? '疊合中…' : '返回實驗操作';
   const isNumerical = mode !== 'observe';
@@ -40,12 +40,15 @@ function App(){
       </div>
       <nav className="object-picker" aria-label="選擇物體">
         {Object.values(OBJECTS).map(item=><button key={item.id} className={`object-choice ${objectId===item.id?'selected':''}`} onClick={()=>dispatch({type:'object',id:item.id})} aria-pressed={objectId===item.id}>
-          <span className={item.kind==='bowl'?'bowl-icon':item.kind==='stone'?'stone-icon':`cube-icon ${item.id}`} aria-hidden="true"/><span>{item.label}</span>
+          <span className={item.kind==='bowl'?'bowl-icon':item.kind==='tilted-bowl'?'bowl-icon standing-icon':item.kind==='stone'?'stone-icon':`cube-icon ${item.id}`} aria-hidden="true"/><span>{item.label}</span>
         </button>)}
       </nav>
-      <nav className="mode-switch" aria-label="資訊顯示模式">
-        {[['observe','觀察'],['numbers','數值'],['calc','計算']].map(([id,label])=><button key={id} type="button" aria-pressed={mode===id} className={mode===id?'active':''} onClick={()=>setMode(id)}>{label}</button>)}
-      </nav>
+      <div className="header-tools">
+        <button type="button" className="reset header-reset" onClick={()=>dispatch({type:'reset'})}>↺ 重設實驗</button>
+        <nav className="mode-switch" aria-label="資訊顯示模式">
+          {[['observe','觀察'],['numbers','數值'],['calc','計算']].map(([id,label])=><button key={id} type="button" aria-pressed={mode===id} className={mode===id?'active':''} onClick={()=>setMode(id)}>{label}</button>)}
+        </nav>
+      </div>
       <button type="button" className="help" onClick={()=>helpRef.current.showModal()} aria-label="操作說明">?</button>
     </header>
     <main className="workspace">
@@ -73,9 +76,7 @@ function App(){
           <p className="hint">圓弧中空鐵碗，內放鋼製砝碼。</p>
           {started&&measured.flooded && <p className="hint warning">碗內已進水，直立提出水面會保留水；水的重量也計入外力。重設實驗可清空。</p>}
         </section>}
-        <section className="reset-section">
-          <button type="button" className="reset" onClick={()=>dispatch({type:'reset'})}>↺ 重設實驗</button>
-        </section>
+        {objectId==='bowlSide'&&<section className="control-section"><h2>立鐵碗 · 側放通水</h2><p className="hint">同一個鐵碗斜放入水，讓水進入、空氣排出。完全浸沒後再比較排水量。</p></section>}
       </aside>
 
       <section className="center" aria-label="3D 浮力實驗展示">
@@ -83,7 +84,7 @@ function App(){
           <TankScene object={object} started={started} density={density} measured={measured}
             collectedCm3={collectedCm3} waterLevelCm={water.levelCm} manualBottomCm={manualBottomCm}
             onManualBottom={bottomCm=>dispatch({type:'hold',bottomCm})} rotation={rotation} onRotation={value=>dispatch({type:'rotate',value})} phase={phase}
-            onModelReady={value=>dispatch({type:'animation-complete',phase:value})} flowPulse={flowPulse} mode={mode}/>
+            onModelReady={value=>dispatch({type:'animation-complete',phase:value})} flowPulse={flowPulse} mode={mode} viewRevision={viewRevision}/>
           <div className="glass-note">拖曳空白處旋轉 · 滾輪縮放 · 拖曳物體升降</div>
           <div className="stage-corner" role="status">{started?(manualBottomCm!==null?'定位保持':measured.state):'準備實驗'}</div>
           {phase>=2&&compareValid&&<div className="model-note">{phase===2?'變形：水模型停在量杯上方，完成後按「疊合」。':'疊合：水模型對準物體的水下部分。'} 演示保留原收集紀錄。</div>}
@@ -105,6 +106,8 @@ function App(){
           <div className="feature-text">
             {!started ? '把物體放入水中，再觀察實際收集的液體。' :
               measured.flooded ? '鐵碗保留的水也會改變水缸液面與系統重量；此時不能只用量杯讀數比較外型體積。' :
+              objectId==='bowlSide'&&!compareValid ? '立鐵碗先完全浸沒、排除空氣後，再比較鋼材本身的體積。提出後的累積水量會保留。' :
+              objectId==='bowlSide'&&isNumerical&&phase===0 ? '碗口通水，空氣已排出；完全浸沒時，排水體積等於鋼材本身的 100 cm³。' :
               phase===0 ? '觀察水從溢流口流進量杯。' :
               !compareValid ? '已收集的液體量與當下浸入體積不同，不能直接疊合；請重設後比較。' :
               !isNumerical ? '觀察水模型如何變化，再與物體的水下部分比較。你注意到什麼？' :
@@ -125,6 +128,7 @@ function App(){
             <div><dt>浸入深度比例</dt><dd>{started?`${fmt(measured.immersionRatio*100)}%`:'—'}</dd></div>
             {objectId==='bowl' && <div><dt>鐵碗載重</dt><dd>{fmt(loadG,0)} g</dd></div>}
             {objectId==='bowl' && <div><dt>碗內水量</dt><dd data-testid="retained-water">{started?`${fmt(measured.retainedWaterCm3)} mL`:'—'}</dd></div>}
+            {objectId==='bowlSide'&&<><div><dt>鋼材本身體積</dt><dd>100.0 cm³</dd></div><div><dt>提出時暫留的水</dt><dd data-testid="retained-water">{started?`${fmt(measured.retainedWaterCm3)} mL`:'—'}</dd></div></>}
             {isFormula&&started&&<>
               <div><dt>外力（向下為正）</dt><dd data-testid="external-force">{fmt(externalForce,2)} N</dd></div>
               <div><dt>缸底支持力</dt><dd data-testid="support">{fmt(measured.bottomReactionN,2)} N</dd></div>
@@ -147,10 +151,11 @@ function App(){
           {objectId==='iron' && <><p>鐵塊完全浸沒後，向上拉但仍留在水中，水量有什麼變化？</p></>}
           {objectId==='stone' && <><p>石頭形狀不規則，排出液體如何反映它的體積？</p></>}
           {objectId==='bowl' && <><p>鐵做的碗為什麼可以浮？逐步加重，什麼時候會進水？</p></>}
+          {objectId==='bowlSide'&&<><p>同一個鐵碗斜放，讓水進入、空氣排出後，排水量會怎樣？</p><p>與開口朝上的鐵碗比較看看。</p></>}
         </section>}
       </aside>
     </main>
-    <footer className="footer"><span>Buoyancy Lab v0.5 · 靜力平衡實驗</span><span className="footer-signature"><span>阿基米德原理 · 體積守恆</span><span className="ro-signature" dangerouslySetInnerHTML={{__html:roSignature}}/></span></footer>
+    <footer className="footer"><span>Buoyancy Lab v0.6 · 靜力平衡實驗</span><span className="footer-signature"><span>阿基米德原理 · 體積守恆</span><span className="ro-signature" dangerouslySetInnerHTML={{__html:roSignature}}/></span></footer>
     <dialog ref={helpRef} id="explain" className="explain" aria-labelledby="help-title">
       <h2 id="help-title">操作說明</h2>
       <p>從標題旁的橫排選擇物體，再點選「放入水中」。拖曳物體可定位在指定高度，鬆開滑鼠或手指後仍保持；按「放開」或 Escape 才釋放。定位時，外力滑桿與數值會同步顯示維持該位置所需的外力。水面外標記只代表施力，不是浸水的物體。</p>
@@ -159,6 +164,8 @@ function App(){
       <p>依序「觀察收集量杯」→「變形」→「疊合」。變形先把量杯液體抽出作等體積模型，完成後停在量杯上方並標示體積；再次操作才移向物體的水下部分。演示期間量杯的液體隱藏，收集紀錄不變；返回操作後恢復顯示。</p>
       <p>量杯顯示累積收集量，不會因物體上浮而倒流；若累積收集量與當下浸入體積不同，系統不會錯誤地把兩者當成同一個模型疊合。石頭以橫截面積分計算體積；鐵碗進水是教學簡化模型。</p>
       <p>鐵碗採圓弧內外剖面。碗緣浸入時水可進入，直到裝滿或水缸液面降到碗緣；直立提出時保留已裝入的水。碗內水的重量與水量均納入計算，加入砝碼溢出的水回到水缸；重設會清空。進水後以鐵碗、砝碼及碗內水整體計算受力。場景移動採靜力平衡過渡，未模擬加速度、傾倒或進水流速。</p>
+      <p>「立鐵碗」沿用同一個碗，固定側傾 60°，讓開口通水、空氣排出。完全浸沒後量杯收集 100 mL，對應鋼材本身 100 cm³；水模型也只形成鋼材薄殼。提出時，最低碗緣以下仍可能暫留少量水，會另外記錄並計入重量。</p>
+      <p>預設視角會依展示區大小放大器材並完整取景，留出提示文字的空間。頂部「重設實驗」會同時重設實驗與視角。</p>
       <p><a href="https://openstax.org/books/university-physics-volume-1/pages/14-4-archimedes-principle-and-buoyancy" target="_blank" rel="noreferrer">物理依據：OpenStax 阿基米德原理</a></p>
       <form method="dialog"><button type="submit" className="primary">返回實驗</button></form>
     </dialog>

@@ -5,6 +5,7 @@
 import { stoneSectionAtDraft } from './stone.js';
 import {clamp} from './physics.js';
 import {bowlOuterRadiusAt} from './bowl.js';
+import {tiltedSurfacePoint} from './tilted-bowl.js';
 export const MORPH_RINGS=25;
 export const MORPH_SEGMENTS=24;
 function squareRay(theta,side){
@@ -55,6 +56,8 @@ export function computeRingVolume(positions){
 }
 export function morphMeshData({object,draftCm,progress,volumeCm3}){
  const p=clamp(progress,0,1), targetDraft=clamp(draftCm,0,object.heightCm);
+ const tilted=object.kind==='tilted-bowl';
+ if(tilted&&targetDraft<object.heightCm-1e-5)throw new Error('Compare the vented steel shell only after full immersion');
  // Match the beaker's radius and liquid height. Correct the polygon radius so
  // the displayed source cylinder has the same volume as the collected water.
  const sourceHeight=Math.max(volumeCm3,0.001)/(Math.PI*36);
@@ -65,15 +68,18 @@ export function morphMeshData({object,draftCm,progress,volumeCm3}){
    for(let j=0;j<MORPH_SEGMENTS;j++){
      const theta=2*Math.PI*j/MORPH_SEGMENTS;
      const sx=sourceRadius*Math.cos(theta),sz=sourceRadius*Math.sin(theta);
-     const [tx,tz]=section(object,targetHeight,targetDraft,theta,j);
+     const [tx,tz]=tilted?[0,0]:section(object,targetHeight,targetDraft,theta,j);
+     const target=tilted?tiltedSurfacePoint(u,theta):[tx,(u-.5)*targetDraft,tz];
      const k=3*(i*MORPH_SEGMENTS+j);
-     positions[k]=sx+(tx-sx)*p;
-     positions[k+1]=(u-.5)*(sourceHeight*(1-p)+targetDraft*p);
-     positions[k+2]=sz+(tz-sz)*p;
+     positions[k]=sx+(target[0]-sx)*p;
+     positions[k+1]=(u-.5)*sourceHeight*(1-p)+target[1]*p;
+     positions[k+2]=sz+(target[2]-sz)*p;
    }
  }
- positions[positions.length-5]=-(sourceHeight*(1-p)+targetDraft*p)/2;
- positions[positions.length-2]=(sourceHeight*(1-p)+targetDraft*p)/2;
+ for(const [u,offset] of [[0,positions.length-6],[1,positions.length-3]]){
+   const target=tilted?tiltedSurfacePoint(u,0):[0,(u-.5)*targetDraft,0];
+   positions[offset]=target[0]*p;positions[offset+1]=(u-.5)*sourceHeight*(1-p)+target[1]*p;positions[offset+2]=target[2]*p;
+ }
  const indices=[];
  for(let i=0;i<MORPH_RINGS-1;i++)for(let j=0;j<MORPH_SEGMENTS;j++){
    const n=(j+1)%MORPH_SEGMENTS;

@@ -4,38 +4,55 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createStoneMeshData } from './stone.js';
 import { morphMeshData } from './morph.js';
-import { BOWL_RADIUS_CM, BOWL_INNER_RADIUS_CM } from './physics.js';
+import { BOWL_RADIUS_CM, BOWL_INNER_RADIUS_CM,canCompareVolumes } from './physics.js';
 import {bowlProfile,bowlWaterProfile,bowlWaterHeight,bowlInnerRadiusAt,bowlCargoBottomCm} from './bowl.js';
+import {BOWL_TILT,TILT_MIN_Y,TILT_HEIGHT_CM,TILT_CENTER_Z,tiltedPuddleMesh} from './tilted-bowl.js';
+import {experimentFrame,fitFrame,INITIAL_SAMPLE_Y,DEFAULT_VIEW_DIRECTION} from './framing.js';
 
 const TANK_X = -1.05;
 const CUP_X = 1.72;
 const UNIT = 0.1; // world unit per cm
 const TANK_HEIGHT = 2.08;
-const INITIAL_OBJECT_Y = 2.55;
+const INITIAL_OBJECT_Y = INITIAL_SAMPLE_Y;
 const SEA_BLUE = '#2198ce';
 const waterMatProps = {
   color: '#44badd', transparent: true, opacity: 0.40,
   roughness: 0.11, metalness: 0.05, depthWrite: false, side: THREE.DoubleSide
 };
 
-function CameraControls({ dragging }) {
-  const { camera, gl, invalidate } = useThree();
+function CameraControls({ dragging,frame,viewRevision }) {
+  const { camera, gl, invalidate,size } = useThree();
   const controls = useMemo(() => new OrbitControls(camera, gl.domElement), [camera, gl]);
+  const lastView=useRef(null),lastCameraData=useRef('');
+  const frameKey=JSON.stringify(frame);
   useEffect(() => {
     controls.enablePan = false;
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
     controls.minPolarAngle = 0.25;
     controls.maxPolarAngle = Math.PI * 0.51;
-    controls.minDistance = 5.7;
-    controls.maxDistance = 11.5;
-    controls.target.set(0.20, 1.13, 0);
+    controls.minDistance = 1.8;
+    controls.maxDistance = 30;
     controls.addEventListener('change',invalidate);
     controls.update();
     return () => {controls.removeEventListener('change',invalidate);controls.dispose();};
   }, [controls,invalidate]);
   useEffect(() => { controls.enabled = !dragging; }, [dragging, controls]);
-  useFrame(() => controls.update());
+  useEffect(()=>{
+    if(dragging)return;
+    const reset=lastView.current!==viewRevision;
+    const direction=reset?DEFAULT_VIEW_DIRECTION:camera.position.clone().sub(controls.target).toArray();
+    const fit=fitFrame({...frame,width:size.width,height:size.height,fov:camera.fov,direction,minDistance:reset?0:camera.position.distanceTo(controls.target)});
+    // Clear residual orbit damping before committing the fitted view.
+    controls.enableDamping=false;controls.update();
+    camera.position.fromArray(fit.position);controls.target.fromArray(fit.target);controls.update();
+    controls.enableDamping=true;lastView.current=viewRevision;invalidate();
+  },[frameKey,viewRevision,size.width,size.height,dragging,controls,camera,invalidate]);
+  useFrame(()=>{
+    controls.update();
+    const data=JSON.stringify({position:camera.position.toArray(),target:controls.target.toArray(),fov:camera.fov});
+    if(data!==lastCameraData.current){gl.domElement.dataset.camera=data;lastCameraData.current=data;}
+  });
   return null;
 }
 
@@ -199,6 +216,12 @@ function Sample({ object, targetY, started, bottomCm, onManualBottom, onDragging
   const bowlPoints=useMemo(()=>bowlProfile().map(([r,y])=>new THREE.Vector2(r*UNIT,y*UNIT)),[]);
   const waterPoints=useMemo(()=>bowlWaterProfile(retainedWaterCm3,loadG).map(([r,y])=>new THREE.Vector2(r*UNIT,y*UNIT)),[retainedWaterCm3,loadG]);
   const insideWaterY=bowlWaterHeight(retainedWaterCm3,loadG);
+  const puddle=useMemo(()=>{
+    if(object.kind!=='tilted-bowl')return null;
+    const data=tiltedPuddleMesh(),g=new THREE.BufferGeometry();
+    g.setAttribute('position',new THREE.BufferAttribute(data.positions,3));g.setIndex(data.indices);g.computeVertexNormals();return g;
+  },[object.kind]);
+  useEffect(()=>()=>puddle?.dispose(),[puddle]);
   useEffect(()=>()=>stoneGeom.dispose(),[stoneGeom]);
   useEffect(()=>()=>onDraggingChange(false),[onDraggingChange]);
   useFrame((_,delta)=>{
@@ -264,6 +287,13 @@ function Sample({ object, targetY, started, bottomCm, onManualBottom, onDragging
         <torusGeometry args={[(BOWL_RADIUS_CM+BOWL_INNER_RADIUS_CM)*UNIT/2,.015,10,96]}/>
         <meshStandardMaterial color="#ecf4f6" metalness={0.86} roughness={0.16}/>
       </mesh>
+    </>}
+    {object.kind==='tilted-bowl'&&<>
+      <group position={[0,(-TILT_MIN_Y-TILT_HEIGHT_CM/2)*UNIT,-TILT_CENTER_Z*UNIT]} rotation={[BOWL_TILT,0,0]}>
+        <mesh castShadow receiveShadow><latheGeometry args={[bowlPoints,128]}/><meshStandardMaterial color="#bfcfd8" metalness={.7} roughness={.26} side={THREE.DoubleSide}/></mesh>
+        <mesh position={[0,.8,0]} rotation={[-Math.PI/2,0,0]}><torusGeometry args={[(BOWL_RADIUS_CM+BOWL_INNER_RADIUS_CM)*UNIT/2,.015,10,96]}/><meshStandardMaterial color="#ecf4f6" metalness={.86} roughness={.16}/></mesh>
+      </group>
+      {retainedWaterCm3>.01&&<mesh geometry={puddle} position={[0,-TILT_HEIGHT_CM*UNIT/2,0]} scale={[UNIT,UNIT,UNIT]}><meshPhysicalMaterial color="#40c7e9" transparent opacity={.8} roughness={.08} side={THREE.DoubleSide} depthWrite={false}/></mesh>}
     </>}
   </group>;
 }
@@ -335,7 +365,7 @@ function ForceMarker({measured,waterLevelCm,held,labelRef,object}){
   </group>;
 }
 
-function SceneContents({ object, started, measured, collectedCm3, waterLevelCm, manualBottomCm, onManualBottom, phase, flowPulse, mode, rotation, onRotation, reducedMotion, modelLabelRef, forceLabelRef, onModelReady }) {
+function SceneContents({ object, started, measured, collectedCm3, waterLevelCm, manualBottomCm, onManualBottom, phase, flowPulse, mode, rotation, onRotation, reducedMotion, modelLabelRef, forceLabelRef, onModelReady,viewRevision }) {
   const [dragging,setDragging] = useState(false);
   const [flowing,setFlowing] = useState(false);
   useEffect(() => {
@@ -346,7 +376,9 @@ function SceneContents({ object, started, measured, collectedCm3, waterLevelCm, 
   }, [flowPulse]);
   const h = object.heightCm*UNIT;
   const objectY=measured.bottomCm*UNIT+h/2;
-  const canOverlay = started && !measured.flooded && Math.abs(collectedCm3-measured.displacedCm3)<0.25 && measured.displacedCm3>0;
+  const canOverlay = canCompareVolumes(object,measured,collectedCm3,started);
+  const forceActive=started&&(manualBottomCm!==null||Math.abs(measured.appliedForceN)>.0001);
+  const frame=experimentFrame({object,started,bottomCm:measured.bottomCm,phase,forceActive,waterLevelCm});
   return <>
     <color attach="background" args={['#0a1b2b']}/>
     <fog attach="fog" args={['#0a1b2b',12,23]}/>
@@ -362,7 +394,7 @@ function SceneContents({ object, started, measured, collectedCm3, waterLevelCm, 
     {started&&mode==='calc'&&<ForceArrows measured={measured} centerY={objectY}/>}
     {phase>=2&&canOverlay&&<ModelOverlay key={`${object.id}-${measured.displacedCm3}`} object={object} bottomCm={measured.bottomCm} rotation={rotation} draftCm={measured.draftCm} collectedCm3={collectedCm3} reducedMotion={reducedMotion} phase={phase} labelRef={modelLabelRef} onReady={onModelReady}/>}
     {started&&(manualBottomCm!==null||Math.abs(measured.appliedForceN)>.0001)&&<ForceMarker measured={measured} waterLevelCm={waterLevelCm} held={manualBottomCm!==null} labelRef={forceLabelRef} object={object}/>}
-    <CameraControls dragging={dragging}/>
+    <CameraControls dragging={dragging} frame={frame} viewRevision={viewRevision}/>
   </>;
 }
 
@@ -391,7 +423,7 @@ class SceneBoundary extends React.Component{
 export default function TankScene(props) {
   const [ready,setReady]=useState(false);
   const modelLabelRef=useRef(null),forceLabelRef=useRef(null);
-  const modelActive=props.phase>=2&&!props.measured.flooded&&props.measured.displacedCm3>0&&Math.abs(props.collectedCm3-props.measured.displacedCm3)<.25;
+  const modelActive=props.phase>=2&&canCompareVolumes(props.object,props.measured,props.collectedCm3,props.started);
   const forceActive=props.started&&(props.manualBottomCm!==null||Math.abs(props.measured.appliedForceN)>.0001);
   const effectiveForce=props.measured.appliedForceN+(props.manualBottomCm!==null?props.measured.requiredHandForceN:0);
   const volume=new Intl.NumberFormat('zh-TW',{maximumFractionDigits:1}).format(props.collectedCm3);

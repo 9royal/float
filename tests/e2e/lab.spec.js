@@ -2,6 +2,7 @@ import {test,expect} from '@playwright/test';
 import {PerspectiveCamera,Vector3} from 'three';
 import {mkdir} from 'node:fs/promises';
 import {BOWL_CAPACITY_CM3,bowlWaterCapacity} from '../../src/bowl.js';
+import {OBJECTS} from '../../src/physics.js';
 
 async function slider(page,name,value){
   const input=page.getByRole('slider',{name,exact:true});
@@ -14,8 +15,9 @@ const number=async(page,id)=>Number((await page.getByTestId(id).innerText()).rep
 async function image(page,name){await mkdir('qa',{recursive:true});await page.screenshot({path:`qa/${name}.png`,fullPage:true});}
 async function samplePoint(page,y){
   const box=await page.locator('canvas').boundingBox();
-  const camera=new PerspectiveCamera(36,box.width/box.height,.1,80);
-  camera.position.set(6.7,3.65,7.7);camera.lookAt(.2,1.13,0);camera.updateMatrixWorld();
+  const info=JSON.parse(await page.locator('canvas').getAttribute('data-camera'));
+  const camera=new PerspectiveCamera(info.fov,box.width/box.height,.1,80);
+  camera.position.fromArray(info.position);camera.lookAt(...info.target);camera.updateMatrixWorld();
   const point=new Vector3(-1.05,y,0).project(camera);
   return {x:box.x+(point.x+1)*box.width/2,y:box.y+(1-point.y)*box.height/2};
 }
@@ -28,7 +30,7 @@ test.beforeEach(async({page})=>{
 
 test('observation starts without answers and has one selector and action per function',async({page})=>{
   await expect(page.locator('.results-panel,.equation,.control-number')).toHaveCount(0);
-  for(const name of ['木塊','鐵塊','石頭','鐵碗'])await expect(page.getByRole('button',{name,exact:true})).toHaveCount(1);
+  for(const name of ['木塊','鐵塊','石頭','鐵碗','立鐵碗'])await expect(page.getByRole('button',{name,exact:true})).toHaveCount(1);
   await expect(page.getByRole('button',{name:'↺ 重設實驗',exact:true})).toHaveCount(1);
   await expect(page.getByRole('status')).toHaveText('準備實驗');
   await image(page,'01-observation');
@@ -52,6 +54,47 @@ test('the object choices sit between the brand and mode switch and observation a
   await expect(page.getByTestId('volume-relation')).toContainText('有什麼關係？');await expect(page.getByTestId('volume-relation')).not.toContainText('=');
   for(const mode of ['數值','計算']){await page.getByRole('button',{name:mode,exact:true}).click();await expect(page.getByTestId('volume-relation')).toHaveText(/量杯收集的水\s*=\s*浸入部分體積/);}
   await page.getByRole('button',{name:'觀察',exact:true}).click();await expect(page.getByTestId('volume-relation')).not.toContainText('=');await image(page,'12-top-object-picker');
+});
+
+test('the enlarged default view fits every object and reset sits immediately before observation',async({page})=>{
+  await expect(page.locator('.settings .reset')).toHaveCount(0);
+  for(const size of [{width:1280,height:606},{width:390,height:844}]){
+    await page.setViewportSize(size);
+    const reset=await page.getByRole('button',{name:'↺ 重設實驗',exact:true}).boundingBox(),observe=await page.getByRole('button',{name:'觀察',exact:true}).boundingBox();
+    expect(reset.x+reset.width).toBeLessThanOrEqual(observe.x);expect(Math.abs(reset.y+reset.height/2-observe.y-observe.height/2)).toBeLessThan(2);
+    for(const object of Object.values(OBJECTS)){
+      await page.getByRole('button',{name:object.label,exact:true}).click();
+      await expect.poll(async()=>{
+        const box=await page.locator('canvas').boundingBox(),info=JSON.parse(await page.locator('canvas').getAttribute('data-camera'));
+        const camera=new PerspectiveCamera(info.fov,box.width/box.height,.1,80);camera.position.fromArray(info.position);camera.lookAt(...info.target);camera.updateMatrixWorld();
+        const points=[],add=(min,max)=>{for(const x of [min[0],max[0]])for(const y of [min[1],max[1]])for(const z of [min[2],max[2]])points.push(new Vector3(x,y,z).project(camera));};
+        add([-2.64,-.06,-1.08],[.54,2.1,1.08]);add([1.05,0,-.67],[2.39,1.4,.67]);
+        const r=object.kind==='bowl'||object.kind==='tilted-bowl'?.86:object.kind==='stone'?.72:.51,h=object.heightCm*.1;
+        add([-1.05-r,2.55-h/2,-r],[-1.05+r,2.55+h/2,r]);
+        const x=points.map(p=>(p.x+1)*box.width/2),y=points.map(p=>(1-p.y)*box.height/2);
+        return Math.min(...x)>=16&&Math.max(...x)<=box.width-16&&Math.min(...y)>=20&&Math.max(...y)<=box.height-50&&Math.max((Math.max(...x)-Math.min(...x))/(box.width-36),(Math.max(...y)-Math.min(...y))/(box.height-74))>.9;
+      }).toBe(true);
+    }
+  }
+  await page.setViewportSize({width:1280,height:606});await page.getByRole('button',{name:'鐵碗',exact:true}).click();await page.waitForTimeout(400);await image(page,'15-large-default');
+  const initial=JSON.parse(await page.locator('canvas').getAttribute('data-camera'));
+  const distance=q=>new Vector3(...q.position).distanceTo(new Vector3(...q.target));
+  await page.locator('canvas').hover();await page.mouse.wheel(0,-450);await page.waitForTimeout(700);
+  expect(distance(JSON.parse(await page.locator('canvas').getAttribute('data-camera')))).toBeLessThan(distance(initial)-.2);
+  await page.getByRole('button',{name:'↺ 重設實驗',exact:true}).click();
+  await expect.poll(async()=>distance(JSON.parse(await page.locator('canvas').getAttribute('data-camera')))).toBeCloseTo(distance(initial),2);
+});
+
+test('the side-tilted bowl measures only its 100 cm³ steel shell and overlays the same hollow shape',async({page})=>{
+  await page.getByRole('button',{name:'立鐵碗',exact:true}).click();await page.getByRole('button',{name:'計算',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
+  expect(await number(page,'displacement')).toBeCloseTo(100,1);expect(await number(page,'collected')).toBeCloseTo(100,1);
+  expect(await number(page,'buoyancy')).toBeCloseTo(.98,2);expect(await number(page,'support')).toBeCloseTo(6.66,2);expect(await number(page,'retained-water')).toBe(0);
+  await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await page.getByRole('button',{name:'變形',exact:true}).click();
+  await expect(page.getByRole('button',{name:'疊合',exact:true})).toBeEnabled({timeout:15000});await expect(page.getByTestId('model-volume')).toContainText('100 cm³');
+  await page.getByRole('button',{name:'疊合',exact:true}).click();await expect(page.getByRole('button',{name:'返回實驗操作',exact:true})).toBeEnabled({timeout:15000});await image(page,'14-standing-steel-overlay');
+  await page.getByRole('button',{name:'返回實驗操作',exact:true}).click();for(let i=0;i<12;i++)await page.locator('.stage').press('ArrowUp');
+  expect(await number(page,'displacement')).toBeLessThan(100);await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();
+  await expect(page.getByRole('button',{name:'返回實驗操作',exact:true})).toBeVisible();await expect(page.getByTestId('model-volume')).toHaveCount(0);
 });
 
 test('pointer dragging fixes wood until explicit release and preserves the collected water',async({page})=>{
@@ -192,7 +235,7 @@ test.describe('phone touch input',()=>{
 
 test('all objects and information modes run without browser JavaScript errors',async({page})=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
-  for(const object of ['木塊','鐵塊','石頭','鐵碗']){
+  for(const object of ['木塊','鐵塊','石頭','鐵碗','立鐵碗']){
     await page.getByRole('button',{name:object,exact:true}).click();
     await page.getByRole('button',{name:'放入水中',exact:true}).click();
     for(const mode of ['觀察','數值','計算'])await page.getByRole('button',{name:mode,exact:true}).click();
