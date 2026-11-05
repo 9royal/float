@@ -1,10 +1,11 @@
 import {test,expect} from '@playwright/test';
 import {PerspectiveCamera,Vector3} from 'three';
 import {mkdir} from 'node:fs/promises';
+import {BOWL_CAPACITY_CM3,bowlWaterCapacity} from '../../src/bowl.js';
 
 async function slider(page,name,value){
   const input=page.getByRole('slider',{name,exact:true});
-  const min=Number(await input.getAttribute('min')),max=Number(await input.getAttribute('max')),step=Number(await input.getAttribute('step'));
+  const min=Number(await input.getAttribute('min')),max=Number(await input.getAttribute('max')),step=Number(await input.getAttribute('data-step')||await input.getAttribute('step'));
   const fromEnd=Math.abs(max-value)<Math.abs(value-min);
   await input.press(fromEnd?'End':'Home');
   for(let i=0;i<Math.round(Math.abs(value-(fromEnd?max:min))/step);i++)await input.press(fromEnd?'ArrowLeft':'ArrowRight');
@@ -20,7 +21,7 @@ async function samplePoint(page,y){
 }
 
 test.beforeEach(async({page})=>{
-  await page.goto('/');await expect(page.getByRole('button',{name:'放入水中',exact:true})).toBeVisible();
+  await page.goto('/',{waitUntil:'domcontentloaded'});await expect(page.getByRole('button',{name:'放入水中',exact:true})).toBeVisible();
   await expect(page.locator('canvas')).toBeVisible();
   await expect(page.locator('[data-scene-ready="true"]')).toBeVisible();
 });
@@ -42,6 +43,17 @@ test('wood density and applied force show the four agreed numerical cases',async
   await image(page,'02-wood-force');
 });
 
+test('the object choices sit between the brand and mode switch and observation asks before revealing equality',async({page})=>{
+  await expect(page.locator('.subtitle')).toHaveCount(0);
+  const brand=await page.locator('.brand').boundingBox(),choices=await page.getByRole('navigation',{name:'選擇物體'}).boundingBox(),modes=await page.getByRole('navigation',{name:'資訊顯示模式'}).boundingBox();
+  expect(choices.x).toBeGreaterThan(brand.x+brand.width);expect(choices.x+choices.width).toBeLessThanOrEqual(modes.x);
+  const objectButtons=await page.locator('.object-picker button').all();const boxes=await Promise.all(objectButtons.map(b=>b.boundingBox()));
+  expect(Math.max(...boxes.map(b=>b.y))-Math.min(...boxes.map(b=>b.y))).toBeLessThan(2);
+  await expect(page.getByTestId('volume-relation')).toContainText('有什麼關係？');await expect(page.getByTestId('volume-relation')).not.toContainText('=');
+  for(const mode of ['數值','計算']){await page.getByRole('button',{name:mode,exact:true}).click();await expect(page.getByTestId('volume-relation')).toHaveText(/量杯收集的水\s*=\s*浸入部分體積/);}
+  await page.getByRole('button',{name:'觀察',exact:true}).click();await expect(page.getByTestId('volume-relation')).not.toContainText('=');await image(page,'12-top-object-picker');
+});
+
 test('pointer dragging fixes wood until explicit release and preserves the collected water',async({page})=>{
   await page.getByRole('button',{name:'數值',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
   // Wait for the illustrative transition to settle before hit testing the mesh.
@@ -49,6 +61,7 @@ test('pointer dragging fixes wood until explicit release and preserves the colle
   const p=await samplePoint(page,1.5);
   await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x,p.y+150,{steps:12});
   await expect(page.getByRole('status')).toHaveText('定位保持');expect(await number(page,'displacement')).toBeCloseTo(1000,1);
+  expect(await number(page,'external-force-control')).toBeCloseTo(3.92,2);
   await page.mouse.up();await expect(page.getByRole('status')).toHaveText('定位保持');
   await expect(page.getByTestId('force-marker')).toContainText('水面外的施力示意');
   await page.waitForTimeout(600);expect(await number(page,'displacement')).toBeCloseTo(1000,1);await image(page,'03a-wood-held');
@@ -61,7 +74,8 @@ test('pointer dragging fixes wood until explicit release and preserves the colle
 test('keyboard depth control holds wood after keyup and Escape releases it',async({page})=>{
   await page.getByRole('button',{name:'計算',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
   await page.locator('.stage').focus();for(let i=0;i<24;i++)await page.keyboard.down('ArrowDown');
-  expect(await number(page,'displacement')).toBeCloseTo(1000,1);expect(await number(page,'hand-force')).toBeCloseTo(3.92,2);await page.keyboard.up('ArrowDown');
+  expect(await number(page,'displacement')).toBeCloseTo(1000,1);expect(await number(page,'external-force')).toBeCloseTo(3.92,2);await page.keyboard.up('ArrowDown');
+  expect(Number(await page.getByRole('slider',{name:'向上或向下的外力',exact:true}).inputValue())).toBeCloseTo(3.92,2);
   await expect(page.getByRole('status')).toHaveText('定位保持');expect(await number(page,'displacement')).toBeCloseTo(1000,1);
   await page.keyboard.press('Escape');
   expect(await number(page,'displacement')).toBeCloseTo(600,1);expect(await number(page,'collected')).toBeCloseTo(1000,1);
@@ -117,8 +131,8 @@ test('observation mode reveals the model volume only during transformation and f
 test('bowl is hollow, carries cargo, floods and requires reset to become dry again',async({page})=>{
   await page.getByRole('button',{name:'鐵碗',exact:true}).click();await page.getByRole('button',{name:'數值',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
   expect(await number(page,'displacement')).toBeCloseTo(780,1);await page.waitForTimeout(1200);await image(page,'07-bowl-floating');
-  await slider(page,'鐵碗額外載重',700);await expect(page.getByRole('status')).toHaveText('進水沉底');expect(await number(page,'collected')).toBeCloseTo(1231.5,1);
-  expect(await number(page,'displacement')).toBeCloseTo(189.7,1);await page.waitForTimeout(1200);await image(page,'08-bowl-flooded');
+  await slider(page,'鐵碗額外載重',700);await expect(page.getByRole('status')).toHaveText('進水沉底');expect(await number(page,'collected')).toBeCloseTo(BOWL_CAPACITY_CM3,1);
+  expect(await number(page,'displacement')).toBeCloseTo(BOWL_CAPACITY_CM3,1);expect(await number(page,'retained-water')).toBeCloseTo(bowlWaterCapacity(700),1);await page.waitForTimeout(1200);await image(page,'08-bowl-flooded');
   await slider(page,'鐵碗額外載重',0);await expect(page.getByRole('status')).toHaveText('進水沉底');
   await page.getByRole('button',{name:'↺ 重設實驗',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();await expect(page.getByRole('status')).toHaveText('漂浮平衡');
 });
@@ -126,8 +140,28 @@ test('bowl is hollow, carries cargo, floods and requires reset to become dry aga
 test('a flooded bowl responds correctly to upward force and never refills the tank',async({page})=>{
   await page.getByRole('button',{name:'鐵碗',exact:true}).click();await page.getByRole('button',{name:'數值',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
   await slider(page,'鐵碗額外載重',700);await slider(page,'鐵碗額外載重',0);
-  await slider(page,'向上或向下的外力',-7);await expect(page.getByRole('status')).toHaveText('進水平衡');expect(await number(page,'buoyancy')).toBeCloseTo(.64,2);
-  await slider(page,'向上或向下的外力',-18);await expect(page.getByRole('status')).toHaveText('向上離水');expect(await number(page,'displacement')).toBe(0);expect(await number(page,'collected')).toBeCloseTo(1231.5,1);
+  await slider(page,'向上或向下的外力',-7);await expect(page.getByRole('status')).toHaveText('進水平衡');expect(await number(page,'buoyancy')).toBeCloseTo(11.53,2);
+  await slider(page,'向上或向下的外力',-35);await expect(page.getByRole('status')).toHaveText('向上離水');expect(await number(page,'displacement')).toBe(0);expect(await number(page,'collected')).toBeCloseTo(BOWL_CAPACITY_CM3,1);expect(await number(page,'retained-water')).toBeCloseTo(bowlWaterCapacity(),1);
+});
+
+test('actual dragging sinks the curved bowl then lifts it full of water with synchronized force',async({page})=>{
+  await page.getByRole('button',{name:'鐵碗',exact:true}).click();await page.getByRole('button',{name:'計算',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
+  await page.waitForTimeout(1800);let p=await samplePoint(page,1.3935);
+  await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x,p.y+170,{steps:15});await page.mouse.up();
+  await expect(page.getByRole('status')).toHaveText('定位保持');expect(await number(page,'retained-water')).toBeCloseTo(bowlWaterCapacity(),1);
+  expect(await number(page,'external-force-control')).toBeCloseTo(-6.66,2);
+  await page.waitForTimeout(1800);p=await samplePoint(page,.4);
+  await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x,p.y-220,{steps:18});await page.mouse.up();
+  await expect(page.getByRole('status')).toHaveText('定位保持');expect(await number(page,'displacement')).toBe(0);
+  expect(await number(page,'retained-water')).toBeCloseTo(bowlWaterCapacity(),1);
+  expect(await number(page,'external-force-control')).toBeCloseTo(-18.53,2);
+  expect(await number(page,'external-force')).toBeCloseTo(-await number(page,'weight'),2);
+  expect(await number(page,'water-level')).toBeCloseTo(12.13,2);
+  const feature=await page.locator('.feature-panel').boundingBox(),condition=await page.locator('.feature-text').boundingBox();
+  expect(condition.y+condition.height).toBeLessThanOrEqual(feature.y+feature.height);
+  await page.getByRole('button',{name:'數值',exact:true}).click();await page.waitForTimeout(1500);await image(page,'13-bowl-lifted-full');
+  await page.getByRole('button',{name:'放開鐵碗',exact:true}).click();await expect(page.getByRole('status')).toHaveText('進水沉底');
+  expect(await number(page,'retained-water')).toBeCloseTo(bowlWaterCapacity(),1);expect(await number(page,'external-force-control')).toBe(0);
 });
 
 test('help is keyboard accessible and small layouts do not overflow',async({page})=>{

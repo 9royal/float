@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createStoneMeshData } from './stone.js';
 import { morphMeshData } from './morph.js';
-import { BOWL_RADIUS_CM, BOWL_HEIGHT_CM, BOWL_BOTTOM_CM, BOWL_INNER_RADIUS_CM } from './physics.js';
+import { BOWL_RADIUS_CM, BOWL_INNER_RADIUS_CM } from './physics.js';
+import {bowlProfile,bowlWaterProfile,bowlWaterHeight,bowlInnerRadiusAt,bowlCargoBottomCm} from './bowl.js';
 
 const TANK_X = -1.05;
 const CUP_X = 1.72;
@@ -182,7 +183,7 @@ function ScaleLabel({text,position}){
   return <sprite position={position} scale={[.70,.28,1]}><spriteMaterial map={texture} transparent depthTest={false}/></sprite>;
 }
 
-function Sample({ object, targetY, started, bottomCm, onManualBottom, onDraggingChange, loadG, rotation, onRotation, reducedMotion }) {
+function Sample({ object, targetY, started, bottomCm, onManualBottom, onDraggingChange, loadG, retainedWaterCm3, rotation, onRotation, reducedMotion }) {
   const {camera,invalidate}=useThree();
   const ref=useRef(null);
   const start=useRef(null);
@@ -195,12 +196,9 @@ function Sample({ object, targetY, started, bottomCm, onManualBottom, onDragging
     g.scale(UNIT,UNIT,UNIT);
     return g;
   },[]);
-  const bowlPoints=useMemo(()=>[
-    new THREE.Vector2(0,0),new THREE.Vector2(BOWL_RADIUS_CM*UNIT,0),
-    new THREE.Vector2(BOWL_RADIUS_CM*UNIT,BOWL_HEIGHT_CM*UNIT),
-    new THREE.Vector2(BOWL_INNER_RADIUS_CM*UNIT,BOWL_HEIGHT_CM*UNIT),
-    new THREE.Vector2(BOWL_INNER_RADIUS_CM*UNIT,BOWL_BOTTOM_CM*UNIT),new THREE.Vector2(0,BOWL_BOTTOM_CM*UNIT)
-  ],[]);
+  const bowlPoints=useMemo(()=>bowlProfile().map(([r,y])=>new THREE.Vector2(r*UNIT,y*UNIT)),[]);
+  const waterPoints=useMemo(()=>bowlWaterProfile(retainedWaterCm3,loadG).map(([r,y])=>new THREE.Vector2(r*UNIT,y*UNIT)),[retainedWaterCm3,loadG]);
+  const insideWaterY=bowlWaterHeight(retainedWaterCm3,loadG);
   useEffect(()=>()=>stoneGeom.dispose(),[stoneGeom]);
   useEffect(()=>()=>onDraggingChange(false),[onDraggingChange]);
   useFrame((_,delta)=>{
@@ -232,7 +230,6 @@ function Sample({ object, targetY, started, bottomCm, onManualBottom, onDragging
     e.stopPropagation();
     try{e.target.releasePointerCapture(e.pointerId);}catch{/*already released*/}
     start.current=null;
-    if(object.id!=='wood')onManualBottom(null);
     onDraggingChange(false);
   };
   const cargoSide=Math.cbrt(loadG/7.8)*UNIT;
@@ -253,14 +250,18 @@ function Sample({ object, targetY, started, bottomCm, onManualBottom, onDragging
     </mesh>}
     {object.kind==='bowl' && <>
       <mesh castShadow receiveShadow position={[0,-.4,0]}>
-        <latheGeometry args={[bowlPoints,64]}/>
-        <meshStandardMaterial color="#bdcad1" metalness={0.82} roughness={0.22} side={THREE.DoubleSide}/>
+        <latheGeometry args={[bowlPoints,128]}/>
+        <meshStandardMaterial color="#bfcfd8" metalness={0.7} roughness={0.26} side={THREE.DoubleSide}/>
       </mesh>
-      {loadG>0&&<mesh position={[0,-.4+BOWL_BOTTOM_CM*UNIT+cargoSide/2,0]} castShadow>
+      {retainedWaterCm3>.01&&<group position={[0,-.4,0]}>
+        <mesh><latheGeometry args={[waterPoints,96]}/><meshPhysicalMaterial color="#189fd2" transparent opacity={.66} roughness={.09} side={THREE.DoubleSide} depthWrite={false}/></mesh>
+        <mesh position={[0,insideWaterY*UNIT+.002,0]} rotation={[-Math.PI/2,0,0]}><circleGeometry args={[bowlInnerRadiusAt(insideWaterY)*UNIT,96]}/><meshPhysicalMaterial color="#60dcf1" transparent opacity={.8} roughness={.08} side={THREE.DoubleSide} depthWrite={false}/></mesh>
+      </group>}
+      {loadG>0&&<mesh position={[0,-.4+bowlCargoBottomCm(loadG)*UNIT+cargoSide/2,0]} castShadow>
         <boxGeometry args={[cargoSide,cargoSide,cargoSide]}/><meshStandardMaterial color="#4c606e" roughness={.27} metalness={.8}/>
       </mesh>}
       <mesh position={[0,.39,0]} rotation={[-Math.PI/2,0,0]}>
-        <torusGeometry args={[.675,.023,8,64]}/>
+        <torusGeometry args={[(BOWL_RADIUS_CM+BOWL_INNER_RADIUS_CM)*UNIT/2,.015,10,96]}/>
         <meshStandardMaterial color="#ecf4f6" metalness={0.86} roughness={0.16}/>
       </mesh>
     </>}
@@ -320,10 +321,10 @@ function ModelOverlay({object, bottomCm, draftCm, collectedCm3, rotation, reduce
   </mesh>;
 }
 
-function ForceMarker({measured,waterLevelCm,held,labelRef}){
+function ForceMarker({measured,waterLevelCm,held,labelRef,object}){
   const {camera,size}=useThree();
   const force=measured.appliedForceN+(held?measured.requiredHandForceN:0);
-  const y=Math.max(waterLevelCm*UNIT+.63,(measured.bottomCm+10)*UNIT+.5);
+  const y=Math.max(waterLevelCm*UNIT+.63,(measured.bottomCm+object.heightCm)*UNIT+.5);
   const anchor=useMemo(()=>new THREE.Vector3(),[]);
   useFrame(()=>{anchor.set(TANK_X,y+.32,0);projectNote(labelRef.current,anchor,camera,size);});
   return <group position={[TANK_X,y,0]} name="above-water-force-marker">
@@ -357,10 +358,10 @@ function SceneContents({ object, started, measured, collectedCm3, waterLevelCm, 
     <MuseumStage/>
     <Tank waterLevelCm={waterLevelCm} showFlow={flowing&&!reducedMotion&&phase<2} collectedCm3={collectedCm3} reducedMotion={reducedMotion}/>
     <Beaker collectedCm3={collectedCm3} numerical={mode!=='observe'} reducedMotion={reducedMotion} modelActive={phase>=2&&canOverlay}/>
-    <Sample key={object.id} object={object} targetY={objectY} started={started} loadG={measured.loadG} bottomCm={measured.bottomCm} rotation={rotation} onRotation={onRotation} onManualBottom={onManualBottom} onDraggingChange={setDragging} reducedMotion={reducedMotion}/>
+    <Sample key={object.id} object={object} targetY={objectY} started={started} loadG={measured.loadG} retainedWaterCm3={measured.retainedWaterCm3} bottomCm={measured.bottomCm} rotation={rotation} onRotation={onRotation} onManualBottom={onManualBottom} onDraggingChange={setDragging} reducedMotion={reducedMotion}/>
     {started&&mode==='calc'&&<ForceArrows measured={measured} centerY={objectY}/>}
     {phase>=2&&canOverlay&&<ModelOverlay key={`${object.id}-${measured.displacedCm3}`} object={object} bottomCm={measured.bottomCm} rotation={rotation} draftCm={measured.draftCm} collectedCm3={collectedCm3} reducedMotion={reducedMotion} phase={phase} labelRef={modelLabelRef} onReady={onModelReady}/>}
-    {started&&object.id==='wood'&&(manualBottomCm!==null||Math.abs(measured.appliedForceN)>.0001)&&<ForceMarker measured={measured} waterLevelCm={waterLevelCm} held={manualBottomCm!==null} labelRef={forceLabelRef}/>}
+    {started&&(manualBottomCm!==null||Math.abs(measured.appliedForceN)>.0001)&&<ForceMarker measured={measured} waterLevelCm={waterLevelCm} held={manualBottomCm!==null} labelRef={forceLabelRef} object={object}/>}
     <CameraControls dragging={dragging}/>
   </>;
 }
@@ -391,7 +392,7 @@ export default function TankScene(props) {
   const [ready,setReady]=useState(false);
   const modelLabelRef=useRef(null),forceLabelRef=useRef(null);
   const modelActive=props.phase>=2&&!props.measured.flooded&&props.measured.displacedCm3>0&&Math.abs(props.collectedCm3-props.measured.displacedCm3)<.25;
-  const forceActive=props.started&&props.object.id==='wood'&&(props.manualBottomCm!==null||Math.abs(props.measured.appliedForceN)>.0001);
+  const forceActive=props.started&&(props.manualBottomCm!==null||Math.abs(props.measured.appliedForceN)>.0001);
   const effectiveForce=props.measured.appliedForceN+(props.manualBottomCm!==null?props.measured.requiredHandForceN:0);
   const volume=new Intl.NumberFormat('zh-TW',{maximumFractionDigits:1}).format(props.collectedCm3);
   const [reducedMotion,setReducedMotion]=useState(()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches);

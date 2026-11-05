@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { stoneDisplacedByDraft,stoneDraftForVolume,stoneHeightCm,stoneTotalVolumeCm3,createStoneMeshData } from '../src/stone.js';
 import {OBJECTS,volumeForDraft,draftForVolume,BOWL_CAPACITY_CM3,equilibrium,buoyancyN} from '../src/physics.js';
+import {bowlOuterVolumeAt,bowlWaterCapacity} from '../src/bowl.js';
 
 test('irregular stone has calibrated volume of 1000 cm³',()=>assert.ok(Math.abs(stoneTotalVolumeCm3-1000)<1e-8));
 test('stone submerged volume is monotonic and bounded',()=>{
@@ -36,14 +37,15 @@ test('bowl floats with hollow excluded volume rather than only iron volume',()=>
  const r=equilibrium({object:OBJECTS.bowl,loadG:0});
  assert.equal(r.state,'漂浮平衡');
  assert.ok(Math.abs(r.displacedCm3-780)<1e-6);
- assert.ok(Math.abs(r.immersionRatio-780/BOWL_CAPACITY_CM3)<1e-6);
+ assert.ok(Math.abs(bowlOuterVolumeAt(r.draftCm)-780)<1e-6);
  assert.ok(Math.abs(r.buoyancyN-7.644)<1e-8);
 });
-test('bowl with heavy cargo floods and only steel and cargo exclude water',()=>{
+test('bowl with heavy cargo floods and includes the retained water in total system weight',()=>{
  const r=equilibrium({object:OBJECTS.bowl,loadG:700});
  assert.equal(r.flooded,true);
  assert.equal(r.state,'進水沉底');
- assert.ok(r.displacedCm3<300);
+ assert.ok(Math.abs(r.displacedCm3-BOWL_CAPACITY_CM3)<1e-6);
+ assert.ok(Math.abs(r.totalMassG-780-700-bowlWaterCapacity(700))<1e-6);
  assert.ok(r.bottomReactionN>0);
 });
 test('saltwater can carry more bowl cargo before flooding',()=>{

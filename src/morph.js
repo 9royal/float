@@ -4,6 +4,7 @@
  */
 import { stoneSectionAtDraft } from './stone.js';
 import {clamp} from './physics.js';
+import {bowlOuterRadiusAt} from './bowl.js';
 export const MORPH_RINGS=25;
 export const MORPH_SEGMENTS=24;
 function squareRay(theta,side){
@@ -17,7 +18,7 @@ function section(object,verticalCm,draftCm,theta,index){
    return [poly[index][0],poly[index][2]];
  }
  if(object.kind==='bowl'){
-   const radius=7;
+   const radius=bowlOuterRadiusAt(verticalCm);
    return [radius*Math.cos(theta),radius*Math.sin(theta)];
  }
  return squareRay(theta,Math.cbrt(object.volumeCm3));
