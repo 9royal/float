@@ -5,7 +5,7 @@ import {OBJECTS,INITIAL_LEVEL_CM,clamp,equilibrium,nextOverflow,waterForPosition
  */
 export function createExperiment(overrides={}){
   return settle({objectId:'wood',density:1,externalForce:0,loadG:0,started:false,
-    manualBottomCm:null,collectedCm3:0,flooded:false,phase:0,rotation:0,flowPulse:0,...overrides});
+    manualBottomCm:null,collectedCm3:0,flooded:false,phase:0,animationReady:true,rotation:0,flowPulse:0,...overrides});
 }
 
 function settle(state){
@@ -69,10 +69,13 @@ export function experimentReducer(state,action){
       return settle({...state,manualBottomCm:action.bottomCm===null?null:clamp(action.bottomCm,0,24),phase:0});
     }
     case 'rotate':return state.objectId==='stone'?{...state,rotation:action.value,phase:0}:state;
+    case 'animation-complete':return state.phase===action.phase&&!state.animationReady?{...state,animationReady:true}:state;
     case 'advance':{
       if(!state.started)return settle({...state,started:true});
+      if(state.phase>=2&&!state.animationReady)return state;
       const valid=!state.flooded&&state.measured.displacedCm3>0&&Math.abs(state.collectedCm3-state.measured.displacedCm3)<0.25;
-      return {...state,phase:state.phase===1&&!valid?0:(state.phase+1)%3};
+      const phase=state.phase===1&&!valid?0:(state.phase+1)%4;
+      return {...state,phase,animationReady:phase<2};
     }
     default:return state;
   }

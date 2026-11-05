@@ -1,4 +1,4 @@
-/** Equal-volume interpolation between a compact cube of liquid and the actual
+/** Equal-volume interpolation between the collected cylinder of liquid and the actual
  * submerged shape. Both meshes use matching horizontal rings/vertex indices.
  * A uniform correction scale restores EXACT enclosed volume for every frame.
  */
@@ -54,22 +54,25 @@ export function computeRingVolume(positions){
 }
 export function morphMeshData({object,draftCm,progress,volumeCm3}){
  const p=clamp(progress,0,1), targetDraft=clamp(draftCm,0,object.heightCm);
- const cubeSide=Math.cbrt(Math.max(volumeCm3,0.001));
+ // Match the beaker's radius and liquid height. Correct the polygon radius so
+ // the displayed source cylinder has the same volume as the collected water.
+ const sourceHeight=Math.max(volumeCm3,0.001)/(Math.PI*36);
+ const sourceRadius=Math.sqrt(Math.PI*36/(MORPH_SEGMENTS*Math.sin(2*Math.PI/MORPH_SEGMENTS)/2));
  const positions=new Float32Array(MORPH_RINGS*MORPH_SEGMENTS*3+6);
  for(let i=0;i<MORPH_RINGS;i++){
    const u=i/(MORPH_RINGS-1),targetHeight=u*targetDraft;
    for(let j=0;j<MORPH_SEGMENTS;j++){
      const theta=2*Math.PI*j/MORPH_SEGMENTS;
-     const [sx,sz]=squareRay(theta,cubeSide);
+     const sx=sourceRadius*Math.cos(theta),sz=sourceRadius*Math.sin(theta);
      const [tx,tz]=section(object,targetHeight,targetDraft,theta,j);
      const k=3*(i*MORPH_SEGMENTS+j);
      positions[k]=sx+(tx-sx)*p;
-     positions[k+1]=(u-.5)*(cubeSide*(1-p)+targetDraft*p);
+     positions[k+1]=(u-.5)*(sourceHeight*(1-p)+targetDraft*p);
      positions[k+2]=sz+(tz-sz)*p;
    }
  }
- positions[positions.length-5]=-(cubeSide*(1-p)+targetDraft*p)/2;
- positions[positions.length-2]=(cubeSide*(1-p)+targetDraft*p)/2;
+ positions[positions.length-5]=-(sourceHeight*(1-p)+targetDraft*p)/2;
+ positions[positions.length-2]=(sourceHeight*(1-p)+targetDraft*p)/2;
  const indices=[];
  for(let i=0;i<MORPH_RINGS-1;i++)for(let j=0;j<MORPH_SEGMENTS;j++){
    const n=(j+1)%MORPH_SEGMENTS;

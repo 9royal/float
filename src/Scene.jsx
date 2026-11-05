@@ -135,7 +135,7 @@ function OverflowPipe({ showFlow, collectedCm3 }) {
   </group>;
 }
 
-function Beaker({ collectedCm3, numerical, reducedMotion }) {
+function Beaker({ collectedCm3, numerical, reducedMotion, modelActive }) {
   const {invalidate}=useThree();
   const filledHeight = Math.max(0.001, Math.min(1.29, (collectedCm3 / (Math.PI * 6 * 6)) * UNIT));
   const fill = useRef();
@@ -160,26 +160,26 @@ function Beaker({ collectedCm3, numerical, reducedMotion }) {
       <torusGeometry args={[0.64,0.025,8,60]}/>
       <meshStandardMaterial color="#caeaff" roughness={0.13} metalness={0.52}/>
     </mesh>
-    <mesh ref={fill} position={[0,0.035,0]} scale={[1,0.003,1]}>
+    <mesh ref={fill} visible={!modelActive} position={[0,0.035,0]} scale={[1,0.003,1]}>
       <cylinderGeometry args={[0.60,0.60,1,48]}/>
       <meshPhysicalMaterial color={SEA_BLUE} transparent opacity={0.48} roughness={0.10} depthWrite={false}/>
     </mesh>
-    {Array.from({ length: 5 }, (_, i) => <mesh key={i} position={[0.61,0.23+i*0.22,0.015]}>
-      <boxGeometry args={[0.007,0.012,0.18]}/><meshBasicMaterial color="#dbf8ff" transparent opacity={0.72}/>
-    </mesh>)}
-    {numerical&&[250,500,750,1000,1250].map(value=><ScaleLabel key={value} text={String(value)} position={[.13,.035+value/(Math.PI*36)*UNIT,.61]}/>)}
+    {[250,500,750,1000,1250].map(value=><group key={value} position={[-.40,.035+value/(Math.PI*36)*UNIT,.48]}>
+      <mesh rotation={[0,-.72,0]}><boxGeometry args={[.15,.012,.012]}/><meshBasicMaterial color="#dbf8ff" depthTest={false}/></mesh>
+      {numerical&&<ScaleLabel text={String(value)} position={[-.34,0,.25]}/>}
+    </group>)}
   </group>;
 }
 
 function ScaleLabel({text,position}){
   const texture=useMemo(()=>{
-    const canvas=document.createElement('canvas');canvas.width=160;canvas.height=64;
-    const ctx=canvas.getContext('2d');ctx.font='bold 38px sans-serif';ctx.fillStyle='#e3f5ff';
-    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,80,32);
+    const canvas=document.createElement('canvas');canvas.width=320;canvas.height=128;
+    const ctx=canvas.getContext('2d');ctx.font='bold 76px sans-serif';ctx.fillStyle='#e3f5ff';
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,160,64);
     return new THREE.CanvasTexture(canvas);
   },[text]);
   useEffect(()=>()=>texture.dispose(),[texture]);
-  return <sprite position={position} scale={[.35,.14,1]}><spriteMaterial map={texture} transparent depthTest={false}/></sprite>;
+  return <sprite position={position} scale={[.70,.28,1]}><spriteMaterial map={texture} transparent depthTest={false}/></sprite>;
 }
 
 function Sample({ object, targetY, started, bottomCm, onManualBottom, onDraggingChange, loadG, rotation, onRotation, reducedMotion }) {
@@ -232,7 +232,7 @@ function Sample({ object, targetY, started, bottomCm, onManualBottom, onDragging
     e.stopPropagation();
     try{e.target.releasePointerCapture(e.pointerId);}catch{/*already released*/}
     start.current=null;
-    onManualBottom(null);
+    if(object.id!=='wood')onManualBottom(null);
     onDraggingChange(false);
   };
   const cargoSide=Math.cbrt(loadG/7.8)*UNIT;
@@ -267,42 +267,74 @@ function Sample({ object, targetY, started, bottomCm, onManualBottom, onDragging
   </group>;
 }
 
-function ModelOverlay({object, bottomCm, draftCm, collectedCm3, rotation, reducedMotion}){
-  const {invalidate}=useThree();
+function projectNote(element,point,camera,size){
+  if(!element)return;
+  point.project(camera);
+  const half=Math.min(element.offsetWidth/2+8,size.width/2);
+  const x=THREE.MathUtils.clamp((point.x+1)*size.width/2,half,size.width-half);
+  const y=THREE.MathUtils.clamp((1-point.y)*size.height/2,element.offsetHeight+10,size.height-90);
+  element.style.transform=`translate3d(${x}px,${y}px,0) translate(-50%,-100%)`;
+}
+
+function ModelOverlay({object, bottomCm, draftCm, collectedCm3, rotation, reducedMotion, phase, labelRef, onReady}){
+  const {invalidate,camera,size}=useThree();
   const mesh=useRef(null);
-  const progress=useRef(0);
+  const animation=useRef({phase,elapsed:0,done:false});
+  const anchor=useMemo(()=>new THREE.Vector3(),[]);
   const geom=useMemo(()=>{
     const data=morphMeshData({object,draftCm,progress:0,volumeCm3:collectedCm3});
     const g=new THREE.BufferGeometry();
-    g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(data.positions.length),3));
+    g.setAttribute('position',new THREE.BufferAttribute(data.positions,3));
     g.setIndex(data.indices);
+    g.computeVertexNormals();
     return g;
   },[object.id,draftCm,collectedCm3]);
   useEffect(()=>()=>geom.dispose(),[geom]);
   useFrame((_,delta)=>{
     if(!mesh.current)return;
-    if(progress.current>=1)return;
-    // A demand-rendered scene may have idled for minutes. Its first delta must
-    // not skip the entire morph on the first frame after pressing the button.
-    const step=progress.current===0?Math.min(delta,1/60):delta;
-    progress.current=reducedMotion?1:THREE.MathUtils.damp(progress.current,1,1.55,step);
-    if(progress.current>0.9995)progress.current=1;
-    const p=progress.current;
-    const smooth=p*p*(3-2*p);
-    const data=morphMeshData({object,draftCm,progress:smooth,volumeCm3:collectedCm3});
-    geom.attributes.position.array.set(data.positions);
-    geom.attributes.position.needsUpdate=true;
-    geom.computeVertexNormals();
-    mesh.current.position.set(THREE.MathUtils.lerp(CUP_X,TANK_X,smooth),THREE.MathUtils.lerp(2.05,(bottomCm+draftCm/2)*UNIT,smooth),0);
-    mesh.current.rotation.y=rotation*smooth;
-    if(progress.current<1)invalidate();
+    if(animation.current.phase!==phase)animation.current={phase,elapsed:0,done:false};
+    const a=animation.current;
+    if(!a.done){
+      // Clamp only the first idle delta so a new step remains observable.
+      a.elapsed+=a.elapsed===0?Math.min(delta,1/60):Math.min(delta,.15);
+      const t=reducedMotion?1:Math.min(1,a.elapsed/(phase===2?2.8:2.0));
+      const ease=p=>{p=THREE.MathUtils.clamp(p,0,1);return p*p*(3-2*p);};
+      const sourceY=.035+collectedCm3/(Math.PI*36)*UNIT/2;
+      const shape=phase===2?ease((t-.35)/.65):1;
+      if(phase===2||a.elapsed<.17){
+        const data=morphMeshData({object,draftCm,progress:shape,volumeCm3:collectedCm3});
+        geom.attributes.position.array.set(data.positions);
+        geom.attributes.position.needsUpdate=true;
+        geom.computeVertexNormals();
+      }
+      mesh.current.position.set(phase===2?CUP_X:THREE.MathUtils.lerp(CUP_X,TANK_X,ease(t)),
+        phase===2?THREE.MathUtils.lerp(sourceY,2.15,ease(t/.42)):THREE.MathUtils.lerp(2.15,(bottomCm+draftCm/2)*UNIT,ease(t)),0);
+      mesh.current.rotation.y=rotation*shape;
+      if(t===1){a.done=true;onReady(phase);}else invalidate();
+    }
+    anchor.copy(mesh.current.position);anchor.y+=Math.max(draftCm, collectedCm3/(Math.PI*36))*UNIT/2+.12;
+    projectNote(labelRef.current,anchor,camera,size);
   });
-  return <mesh ref={mesh} name="volume-overlay" frustumCulled={false} geometry={geom} position={[CUP_X,2.05,0]} scale={[UNIT,UNIT,UNIT]} renderOrder={10}>
-    <meshPhysicalMaterial color="#4bcdf4" transparent opacity={0.32} depthWrite={false} depthTest={false} side={THREE.FrontSide} roughness={0.10} metalness={0.03}/>
+  return <mesh ref={mesh} name="volume-overlay" frustumCulled={false} geometry={geom} position={[CUP_X,.035+collectedCm3/(Math.PI*36)*UNIT/2,0]} scale={[UNIT,UNIT,UNIT]} renderOrder={10}>
+    <meshPhysicalMaterial color="#4bcdf4" transparent opacity={phase===2?.62:.42} depthWrite={false} depthTest={false} side={THREE.FrontSide} roughness={0.10} metalness={0.03}/>
   </mesh>;
 }
 
-function SceneContents({ object, started, measured, collectedCm3, waterLevelCm, onManualBottom, phase, flowPulse, mode, rotation, onRotation, reducedMotion }) {
+function ForceMarker({measured,waterLevelCm,held,labelRef}){
+  const {camera,size}=useThree();
+  const force=measured.appliedForceN+(held?measured.requiredHandForceN:0);
+  const y=Math.max(waterLevelCm*UNIT+.63,(measured.bottomCm+10)*UNIT+.5);
+  const anchor=useMemo(()=>new THREE.Vector3(),[]);
+  useFrame(()=>{anchor.set(TANK_X,y+.32,0);projectNote(labelRef.current,anchor,camera,size);});
+  return <group position={[TANK_X,y,0]} name="above-water-force-marker">
+    {Math.abs(force)>.0001?<>
+      <mesh><cylinderGeometry args={[.022,.022,.32,12]}/><meshBasicMaterial color="#f3b8dc" depthTest={false}/></mesh>
+      <mesh position={[0,force<0?.22:-.22,0]} rotation={[0,0,force<0?0:Math.PI]}><coneGeometry args={[.09,.16,16]}/><meshBasicMaterial color="#f3b8dc" depthTest={false}/></mesh>
+    </>:<mesh rotation={[Math.PI/2,0,0]}><torusGeometry args={[.09,.018,8,24]}/><meshBasicMaterial color="#f3b8dc" depthTest={false}/></mesh>}
+  </group>;
+}
+
+function SceneContents({ object, started, measured, collectedCm3, waterLevelCm, manualBottomCm, onManualBottom, phase, flowPulse, mode, rotation, onRotation, reducedMotion, modelLabelRef, forceLabelRef, onModelReady }) {
   const [dragging,setDragging] = useState(false);
   const [flowing,setFlowing] = useState(false);
   useEffect(() => {
@@ -323,11 +355,12 @@ function SceneContents({ object, started, measured, collectedCm3, waterLevelCm, 
     <pointLight position={[3,3,0]} color="#70dfff" intensity={23} distance={7}/>
     <pointLight position={[-4,3,-1]} color="#fac47b" intensity={16} distance={8}/>
     <MuseumStage/>
-    <Tank waterLevelCm={waterLevelCm} showFlow={flowing&&!reducedMotion} collectedCm3={collectedCm3} reducedMotion={reducedMotion}/>
-    <Beaker collectedCm3={collectedCm3} numerical={mode!=='observe'} reducedMotion={reducedMotion}/>
+    <Tank waterLevelCm={waterLevelCm} showFlow={flowing&&!reducedMotion&&phase<2} collectedCm3={collectedCm3} reducedMotion={reducedMotion}/>
+    <Beaker collectedCm3={collectedCm3} numerical={mode!=='observe'} reducedMotion={reducedMotion} modelActive={phase>=2&&canOverlay}/>
     <Sample key={object.id} object={object} targetY={objectY} started={started} loadG={measured.loadG} bottomCm={measured.bottomCm} rotation={rotation} onRotation={onRotation} onManualBottom={onManualBottom} onDraggingChange={setDragging} reducedMotion={reducedMotion}/>
     {started&&mode==='calc'&&<ForceArrows measured={measured} centerY={objectY}/>}
-    {phase===2 && canOverlay && <ModelOverlay key={`${object.id}-${measured.displacedCm3}`} object={object} bottomCm={measured.bottomCm} rotation={rotation} draftCm={measured.draftCm} collectedCm3={collectedCm3} reducedMotion={reducedMotion}/>}
+    {phase>=2&&canOverlay&&<ModelOverlay key={`${object.id}-${measured.displacedCm3}`} object={object} bottomCm={measured.bottomCm} rotation={rotation} draftCm={measured.draftCm} collectedCm3={collectedCm3} reducedMotion={reducedMotion} phase={phase} labelRef={modelLabelRef} onReady={onModelReady}/>}
+    {started&&object.id==='wood'&&(manualBottomCm!==null||Math.abs(measured.appliedForceN)>.0001)&&<ForceMarker measured={measured} waterLevelCm={waterLevelCm} held={manualBottomCm!==null} labelRef={forceLabelRef}/>}
     <CameraControls dragging={dragging}/>
   </>;
 }
@@ -356,13 +389,20 @@ class SceneBoundary extends React.Component{
 
 export default function TankScene(props) {
   const [ready,setReady]=useState(false);
+  const modelLabelRef=useRef(null),forceLabelRef=useRef(null);
+  const modelActive=props.phase>=2&&!props.measured.flooded&&props.measured.displacedCm3>0&&Math.abs(props.collectedCm3-props.measured.displacedCm3)<.25;
+  const forceActive=props.started&&props.object.id==='wood'&&(props.manualBottomCm!==null||Math.abs(props.measured.appliedForceN)>.0001);
+  const effectiveForce=props.measured.appliedForceN+(props.manualBottomCm!==null?props.measured.requiredHandForceN:0);
+  const volume=new Intl.NumberFormat('zh-TW',{maximumFractionDigits:1}).format(props.collectedCm3);
   const [reducedMotion,setReducedMotion]=useState(()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   useEffect(()=>{const media=window.matchMedia('(prefers-reduced-motion: reduce)');const change=()=>setReducedMotion(media.matches);media.addEventListener('change',change);return()=>media.removeEventListener('change',change);},[]);
   return <SceneBoundary><div className="scene-host" data-scene-ready={ready}>
     <Canvas shadows frameloop="demand" dpr={[1,1.75]} camera={{position:[6.7,3.65,7.7],fov:36,near:0.1,far:80}} gl={{antialias:true,alpha:false}}>
-      <SceneContents {...props} reducedMotion={reducedMotion}/>
+      <SceneContents {...props} reducedMotion={reducedMotion} modelLabelRef={modelLabelRef} forceLabelRef={forceLabelRef}/>
       <SceneReady onReady={setReady}/>
     </Canvas>
+    {modelActive&&<div ref={modelLabelRef} className="model-volume" data-testid="model-volume" aria-live="polite"><span>水下外型 · 水模型體積</span><strong>{volume} cm³</strong><small>＝ {volume} mL 排出液體</small></div>}
+    {forceActive&&<div ref={forceLabelRef} className="force-note" data-testid="force-marker">{props.manualBottomCm!==null?'定位保持':Math.abs(effectiveForce)<.0001?'無外力':effectiveForce>0?'向下施力':'向上施力'}<small>水面外的施力示意{props.mode!=='observe'?` · ${Math.abs(effectiveForce).toFixed(2)} N`:''}</small></div>}
     {!ready&&<div className="scene-loading">正在準備實驗器材…</div>}
   </div></SceneBoundary>;
 }

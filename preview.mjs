@@ -26,7 +26,7 @@ const server=http.createServer(async(req,res)=>{
 server.on('error',e=>{console.error(e.code==='EADDRINUSE'?`Port ${port} is in use. Close the previous preview or set PORT.`:e.message);process.exitCode=1;});
 server.listen(port,'127.0.0.1',()=>{
   const url=`http://127.0.0.1:${port}/`;
-  console.log(`Buoyancy Lab v0.3\nLocal preview: ${url}\nPress Ctrl+C to stop.`);
+  console.log(`Buoyancy Lab v0.4\nLocal preview: ${url}\nPress Ctrl+C to stop.`);
   if(process.argv.includes('--open')){
     if(process.platform==='win32')execFile('cmd.exe',['/d','/c','start',url],{windowsHide:true},()=>{});
     else execFile(process.platform==='darwin'?'open':'xdg-open',[url],()=>{});

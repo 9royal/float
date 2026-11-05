@@ -42,23 +42,28 @@ test('wood density and applied force show the four agreed numerical cases',async
   await image(page,'02-wood-force');
 });
 
-test('actual pointer dragging and release preserve overflow and lower the waterline',async({page})=>{
+test('pointer dragging fixes wood until explicit release and preserves the collected water',async({page})=>{
   await page.getByRole('button',{name:'數值',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
   // Wait for the illustrative transition to settle before hit testing the mesh.
   await page.waitForTimeout(1800);
   const p=await samplePoint(page,1.5);
   await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x,p.y+150,{steps:12});
-  await expect(page.getByRole('status')).toHaveText('手動控制');expect(await number(page,'displacement')).toBeCloseTo(1000,1);
-  await page.mouse.up();await expect(page.getByRole('status')).toHaveText('漂浮平衡');
+  await expect(page.getByRole('status')).toHaveText('定位保持');expect(await number(page,'displacement')).toBeCloseTo(1000,1);
+  await page.mouse.up();await expect(page.getByRole('status')).toHaveText('定位保持');
+  await expect(page.getByTestId('force-marker')).toContainText('水面外的施力示意');
+  await page.waitForTimeout(600);expect(await number(page,'displacement')).toBeCloseTo(1000,1);await image(page,'03a-wood-held');
+  await page.getByRole('button',{name:'放開木塊',exact:true}).click();await expect(page.getByRole('status')).toHaveText('漂浮平衡');
   expect(await number(page,'collected')).toBeCloseTo(1000,1);expect(await number(page,'displacement')).toBeCloseTo(600,1);expect(await number(page,'water-level')).toBeCloseTo(15.33,2);
   await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await expect(page.getByRole('button',{name:'返回實驗操作',exact:true})).toBeVisible();
   await expect(page.locator('.model-note')).toHaveCount(0);await image(page,'03-release-no-return');
 });
 
-test('keyboard depth control releases on keyup',async({page})=>{
+test('keyboard depth control holds wood after keyup and Escape releases it',async({page})=>{
   await page.getByRole('button',{name:'計算',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
   await page.locator('.stage').focus();for(let i=0;i<24;i++)await page.keyboard.down('ArrowDown');
   expect(await number(page,'displacement')).toBeCloseTo(1000,1);expect(await number(page,'hand-force')).toBeCloseTo(3.92,2);await page.keyboard.up('ArrowDown');
+  await expect(page.getByRole('status')).toHaveText('定位保持');expect(await number(page,'displacement')).toBeCloseTo(1000,1);
+  await page.keyboard.press('Escape');
   expect(await number(page,'displacement')).toBeCloseTo(600,1);expect(await number(page,'collected')).toBeCloseTo(1000,1);
 });
 
@@ -70,13 +75,43 @@ test('iron shows bottom support, sufficient lifting force, and a fresh liquid ex
   await slider(page,'液體密度',1.2);expect(await number(page,'collected')).toBeCloseTo(await number(page,'displacement'),1);
 });
 
-test('stone and iron equal-volume overlays preserve the physical cup and align at the bottom',async({page})=>{
+test('transformation stays above the cup with a volume label until a separate overlay action',async({page})=>{
   await page.getByRole('button',{name:'石頭',exact:true}).click();await page.getByRole('button',{name:'數值',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
   expect(await number(page,'displacement')).toBeCloseTo(1000,1);
-  await page.locator('.stage').press('r');await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await page.getByRole('button',{name:'變形與疊合',exact:true}).click();
-  await expect(page.locator('.model-note')).toBeVisible();await page.waitForTimeout(5500);expect(await number(page,'collected')).toBeCloseTo(1000,1);await image(page,'05-stone-overlay');
-  await page.getByRole('button',{name:'鐵塊',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await page.getByRole('button',{name:'變形與疊合',exact:true}).click();
-  await page.waitForTimeout(5500);await image(page,'06-iron-overlay');
+  await page.locator('.stage').press('r');await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await page.getByRole('button',{name:'變形',exact:true}).click();
+  await expect(page.getByRole('button',{name:'變形中…',exact:true})).toBeDisabled();
+  await expect(page.getByRole('button',{name:'疊合',exact:true})).toBeEnabled({timeout:15000});
+  await expect(page.getByTestId('model-volume')).toContainText('1,000 cm³');
+  const atCup=await page.getByTestId('model-volume').boundingBox();await image(page,'05a-stone-transform');
+  await page.waitForTimeout(500);const stillAtCup=await page.getByTestId('model-volume').boundingBox();expect(stillAtCup.x).toBeCloseTo(atCup.x,0);
+  await page.getByRole('button',{name:'疊合',exact:true}).click();await expect(page.getByRole('button',{name:'返回實驗操作',exact:true})).toBeEnabled({timeout:15000});
+  const atObject=await page.getByTestId('model-volume').boundingBox();expect(atObject.x).toBeLessThan(atCup.x-40);
+  expect(await number(page,'collected')).toBeCloseTo(1000,1);await image(page,'05-stone-overlay');
+});
+
+test('iron overlays its underwater part without changing the collection record',async({page})=>{
+  await page.getByRole('button',{name:'數值',exact:true}).click();
+  await page.getByRole('button',{name:'鐵塊',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await page.getByRole('button',{name:'變形',exact:true}).click();
+  await expect(page.getByRole('button',{name:'疊合',exact:true})).toBeEnabled({timeout:15000});await page.getByRole('button',{name:'疊合',exact:true}).click();
+  await expect(page.getByRole('button',{name:'返回實驗操作',exact:true})).toBeEnabled({timeout:15000});
+  expect(await number(page,'collected')).toBeCloseTo(1000,1);await image(page,'06-iron-overlay');
+});
+
+test('observation mode reveals the model volume only during transformation and force changes release a hold',async({page})=>{
+  await page.getByRole('button',{name:'放入水中',exact:true}).click();
+  await expect(page.getByTestId('model-volume')).toHaveCount(0);
+  await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await page.getByRole('button',{name:'變形',exact:true}).click();
+  await expect(page.getByTestId('model-volume')).toContainText('600 cm³');
+  await expect(page.getByRole('button',{name:'疊合',exact:true})).toBeEnabled({timeout:15000});
+  await page.setViewportSize({width:390,height:844});await page.locator('canvas').scrollIntoViewIfNeeded();
+  const canvasBox=await page.locator('canvas').boundingBox(),labelBox=await page.getByTestId('model-volume').boundingBox();
+  expect(labelBox.x).toBeGreaterThanOrEqual(canvasBox.x);expect(labelBox.x+labelBox.width).toBeLessThanOrEqual(canvasBox.x+canvasBox.width);
+  expect(labelBox.y).toBeGreaterThanOrEqual(canvasBox.y);await image(page,'11-mobile-transform');
+  await page.locator('.stage').press('ArrowDown');await expect(page.getByRole('status')).toHaveText('定位保持');
+  await expect(page.getByTestId('model-volume')).toHaveCount(0);
+  await slider(page,'向上或向下的外力',2);await expect(page.getByRole('status')).toHaveText('受力平衡');
+  await expect(page.getByRole('button',{name:'放開木塊',exact:true})).toBeDisabled();
+  await expect(page.getByTestId('force-marker')).toContainText('向下施力');
 });
 
 test('bowl is hollow, carries cargo, floods and requires reset to become dry again',async({page})=>{
@@ -114,8 +149,9 @@ test.describe('phone touch input',()=>{
   const p=await samplePoint(page,1.5);const cdp=await context.newCDPSession(page);
   await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:p.x,y:p.y}]});
   for(let i=1;i<=12;i++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:p.x,y:p.y+12*i}]});
-  await expect(page.getByRole('status')).toHaveText('手動控制');expect(await number(page,'displacement')).toBeCloseTo(1000,1);
-  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await expect(page.getByRole('status')).toHaveText('漂浮平衡');expect(await number(page,'collected')).toBeCloseTo(1000,1);
+  await expect(page.getByRole('status')).toHaveText('定位保持');expect(await number(page,'displacement')).toBeCloseTo(1000,1);
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await expect(page.getByRole('status')).toHaveText('定位保持');
+  await page.getByRole('button',{name:'放開木塊',exact:true}).tap();await expect(page.getByRole('status')).toHaveText('漂浮平衡');expect(await number(page,'collected')).toBeCloseTo(1000,1);
   await image(page,'10-mobile-touch');
  });
 });
@@ -141,7 +177,8 @@ test('reduced motion preserves results and the settled scene stops requesting fr
   await expect(page.locator('[data-scene-ready="true"]')).toBeVisible();
   await page.getByRole('button',{name:'數值',exact:true}).click();await page.getByRole('button',{name:'放入水中',exact:true}).click();
   expect(await number(page,'displacement')).toBeCloseTo(600,1);
-  await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await page.getByRole('button',{name:'變形與疊合',exact:true}).click();
+  await page.getByRole('button',{name:'觀察收集量杯',exact:true}).click();await page.getByRole('button',{name:'變形',exact:true}).click();
+  await expect(page.getByRole('button',{name:'疊合',exact:true})).toBeEnabled();await page.getByRole('button',{name:'疊合',exact:true}).click();
   await expect(page.locator('.model-note')).toBeVisible();await page.waitForTimeout(1800);
   const before=await page.evaluate(()=>window.__qaFrameRequests);await page.waitForTimeout(1000);
   expect((await page.evaluate(()=>window.__qaFrameRequests))-before).toBeLessThan(5);

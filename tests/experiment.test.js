@@ -77,3 +77,22 @@ test('a flooded bowl leaves the liquid under a pull greater than its weight',()=
  let s=start('bowl');s=act(s,{type:'load',value:700});s=act(s,{type:'load',value:0});s=act(s,{type:'force',value:-18});
  assert.equal(s.flooded,true);assert.equal(s.measured.state,'向上離水');near(s.measured.draftCm,0);near(s.measured.displacedCm3,0);near(s.measured.bottomReactionN,0);near(s.collectedCm3,BOWL_CAPACITY_CM3);conserve(s);
 });
+
+test('transformation completes above the cup before overlay can be requested',()=>{
+ let s=start();s=act(s,{type:'advance'});assert.equal(s.phase,1);
+ s=act(s,{type:'advance'});assert.equal(s.phase,2);assert.equal(s.animationReady,false);
+ assert.equal(act(s,{type:'advance'}),s,'rapid clicks cannot skip transformation');
+ assert.equal(act(s,{type:'animation-complete',phase:3}),s,'stale completion cannot unlock another step');
+ s=act(s,{type:'animation-complete',phase:2});assert.equal(s.animationReady,true);
+ s=act(s,{type:'advance'});assert.equal(s.phase,3);assert.equal(s.animationReady,false);
+ s=act(s,{type:'animation-complete',phase:3});s=act(s,{type:'advance'});assert.equal(s.phase,0);
+ near(s.collectedCm3,600);near(s.measured.displacedCm3,600);conserve(s);
+});
+
+test('fixed wood has a balancing constraint and changing applied force releases it',()=>{
+ let s=start();s=act(s,{type:'hold',bottomCm:4});const bottom=s.measured.bottomCm;
+ near(s.measured.buoyancyN,s.measured.weightN+s.externalForce+s.measured.requiredHandForceN);
+ s=act(s,{type:'advance'});s=act(s,{type:'advance'});near(s.measured.bottomCm,bottom);
+ s=act(s,{type:'force',value:2});assert.equal(s.manualBottomCm,null);assert.equal(s.phase,0);
+ near(s.measured.buoyancyN,7.88);conserve(s);
+});
