@@ -15,7 +15,7 @@
 
 網站發布目標：[float.dg15.chatgpt.site](https://float.dg15.chatgpt.site/)。原始碼：[9royal/float](https://github.com/9royal/float)。
 
-網站公開，學生可直接開啟操作，無須登入。GitHub 原始碼存放庫維持私人；這份程式不需要學生帳號、API 金鑰或雲端資料庫，實驗資料不會傳送至第三方分析服務。
+網站與 GitHub 原始碼存放庫均已公開，無須登入即可操作網站、閱讀或下載原始碼。這份程式不需要學生帳號、API 金鑰或雲端資料庫，實驗資料不會傳送至第三方分析服務。
 
 ## 開啟成品
 
